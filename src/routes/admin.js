@@ -60,6 +60,12 @@ r.get("/business", ah(async (req, res) => {
 
 r.delete("/business/:id", ah(async (req, res) => {
   await Business.findByIdAndDelete(req.params.id);
+  // Free up any hardware that was pointing at this business — otherwise it's
+  // left showing "assigned" against a business that no longer exists.
+  await Hardware.updateMany(
+    { assignedBusinessId: req.params.id },
+    { assignedBusinessId: null, status: "available" }
+  );
   res.json({ ok: true });
 }));
 
