@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 const mongod = await MongoMemoryServer.create();
 process.env.MONGO_URI = mongod.getUri("expendifii_test");
 process.env.PORT = "5111";
+process.env.ADMIN_USERNAME = "admin";
 process.env.ADMIN_PASSWORD = "admin123";
 process.env.JWT_SECRET = "test-secret";
 
@@ -29,7 +30,7 @@ const run = async (label, method, path, body, token) => {
   return data;
 };
 
-const loginRes = await run("A1","POST","/admin/login",{ password: "admin123" });
+const loginRes = await run("A1","POST","/admin/login",{ username: "admin", password: "admin123" });
 const token = loginRes.token;
 
 await run("A2","POST","/admin/plans",{ name: "Basic", billingType:"monthly", price:299, features:{analytics:true} }, token);

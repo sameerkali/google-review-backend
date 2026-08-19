@@ -10,10 +10,11 @@ import { ah } from "../utils/asyncHandler.js";
 const r = Router();
 
 r.post("/login", (req, res) => {
+  const adminUser = process.env.ADMIN_USERNAME || "admin";
   const adminPass = process.env.ADMIN_PASSWORD || "admin";
-  return req.body.password === adminPass
+  return req.body.username === adminUser && req.body.password === adminPass
     ? res.json({ token: signAdmin() })
-    : res.status(401).json({ error: "invalid password" });
+    : res.status(401).json({ error: "invalid username or password" });
 });
 
 r.use(adminAuth);
@@ -71,6 +72,17 @@ r.post("/hardware", ah(async (req, res) => {
 r.get("/hardware", ah(async (req, res) => {
   const list = await Hardware.find().populate("assignedBusinessId").sort({ createdAt: -1 });
   res.json(list);
+}));
+
+r.put("/hardware/:id", ah(async (req, res) => {
+  const h = await Hardware.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
+    .populate("assignedBusinessId");
+  return h ? res.json(h) : res.status(404).json({ error: "not found" });
+}));
+
+r.delete("/hardware/:id", ah(async (req, res) => {
+  await Hardware.findByIdAndDelete(req.params.id);
+  res.json({ ok: true });
 }));
 
 r.post("/assign", ah(async (req, res) => {
