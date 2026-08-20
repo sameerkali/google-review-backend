@@ -122,6 +122,52 @@ r.get("/review-suggestions", ah(async (_req, res) =>
   res.json(await ReviewSuggestion.find().populate("businessId").sort({ createdAt: -1 }))
 ));
 
+// Returns each business that has at least one review, with counts by status.
+r.get("/reviews/businesses", ah(async (_req, res) => {
+  const agg = await ReviewSuggestion.aggregate([
+    { $group: { _id: { businessId: "$businessId", status: "$status" }, count: { $sum: 1 } } },
+    { $group: {
+      _id: "$_id.businessId",
+      total: { $sum: "$count" },
+      byStatus: { $push: { status: "$_id.status", count: "$count" } },
+    }},
+    { $lookup: { from: "businesses", localField: "_id", foreignField: "_id", as: "biz" } },
+    { $unwind: { path: "$biz", preserveNullAndEmpty: true } },
+    { $project: {
+      _id: 1,
+      name: "$biz.name",
+      email: "$biz.email",
+      status: "$biz.status",
+      total: 1,
+      byStatus: 1,
+    }},
+    { $sort: { total: -1 } },
+  ]);
+  // flatten byStatus array into named keys for easy consumption
+  const result = agg.map(({ byStatus, ...rest }) => ({
+    ...rest,
+    unused:   byStatus.find((s) => s.status === "unused")?.count  || 0,
+    reserved: byStatus.find((s) => s.status === "reserved")?.count || 0,
+    used:     byStatus.find((s) => s.status === "used")?.count     || 0,
+  }));
+  res.json(result);
+}));
+
+// Paginated reviews for a specific business.
+r.get("/reviews", ah(async (req, res) => {
+  const { businessId, status, page = "1", limit = "25" } = req.query;
+  if (!businessId) return res.status(400).json({ error: "businessId required" });
+  const pageNum  = Math.max(1, parseInt(page, 10)  || 1);
+  const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 25));
+  const q = { businessId };
+  if (status) q.status = status;
+  const [total, data] = await Promise.all([
+    ReviewSuggestion.countDocuments(q),
+    ReviewSuggestion.find(q).sort({ createdAt: -1 }).skip((pageNum - 1) * limitNum).limit(limitNum),
+  ]);
+  res.json({ data, page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) });
+}));
+
 r.post("/review-suggestions/bulk", ah(async (req, res) => {
   const items = Array.isArray(req.body) ? req.body : req.body.items;
   if (!Array.isArray(items) || !items.length) {
