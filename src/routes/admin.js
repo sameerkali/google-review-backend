@@ -122,6 +122,35 @@ r.get("/review-suggestions", ah(async (_req, res) =>
   res.json(await ReviewSuggestion.find().populate("businessId").sort({ createdAt: -1 }))
 ));
 
+r.post("/review-suggestions/bulk", ah(async (req, res) => {
+  const items = Array.isArray(req.body) ? req.body : req.body.items;
+  if (!Array.isArray(items) || !items.length) {
+    return res.status(400).json({ error: "Provide a non-empty items array" });
+  }
+
+  const docs = items
+    .filter((it) => it && it.businessId && String(it.reviewText || "").trim())
+    .map((it) => ({ businessId: it.businessId, reviewText: String(it.reviewText).trim() }));
+  const skipped = items.length - docs.length;
+  if (!docs.length) {
+    return res.status(400).json({ error: "No valid items — each entry needs a businessId and reviewText" });
+  }
+
+  try {
+    const created = await ReviewSuggestion.insertMany(docs, { ordered: false });
+    res.status(201).json({ created: created.length, skipped });
+  } catch (err) {
+    // ordered:false still writes the valid docs even when some fail — report the split
+    // instead of failing the whole batch (e.g. a typo'd businessId in row 4 of 20).
+    const created = err.insertedDocs?.length ?? err.result?.result?.nInserted ?? 0;
+    res.status(created ? 207 : 400).json({
+      created,
+      skipped: skipped + (docs.length - created),
+      error: "Some rows failed — check businessId is a valid, existing business id",
+    });
+  }
+}));
+
 r.get("/analytics", ah(async (req, res) => {
   const q = {};
   if (req.query.businessId) q.businessId = req.query.businessId;
