@@ -132,7 +132,7 @@ r.get("/reviews/businesses", ah(async (_req, res) => {
       byStatus: { $push: { status: "$_id.status", count: "$count" } },
     }},
     { $lookup: { from: "businesses", localField: "_id", foreignField: "_id", as: "biz" } },
-    { $unwind: { path: "$biz", preserveNullAndEmpty: true } },
+    { $unwind: { path: "$biz", preserveNullAndEmptyArrays: true } },
     { $project: {
       _id: 1,
       name: "$biz.name",
