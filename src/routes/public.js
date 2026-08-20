@@ -21,18 +21,25 @@ r.get("/r/:code", ah(async (req, res) => {
   const h = await Hardware.findOne({ serial: req.params.code }).populate("assignedBusinessId");
   if (!h || !h.assignedBusinessId) return res.status(404).json({ error: "invalid code" });
   const b = h.assignedBusinessId;
-  const suggestion = await ReviewSuggestion.findOne({ businessId: b._id, status: "unused" });
-  if (suggestion) {
-    suggestion.status = "reserved";
-    suggestion.reservedAt = new Date();
-    await suggestion.save();
-  }
+
+  // Reserve up to 3 unused suggestions at once
+  const suggestions = await ReviewSuggestion.find({ businessId: b._id, status: "unused" }).limit(3);
+  const now = new Date();
+  await Promise.all(
+    suggestions.map((s) => {
+      s.status = "reserved";
+      s.reservedAt = now;
+      return s.save();
+    })
+  );
+
   res.json({
     business: { name: b.name, logoUrl: b.logoUrl, googleReviewUrl: b.googleReviewUrl },
-    suggestion: suggestion?.reviewText || null,
+    suggestions: suggestions.map((s) => ({ id: s._id, text: s.reviewText })),
     hardware: { code: h.serial },
   });
 }));
+
 
 const event = (eventType) => ah(async (req, res) => {
   const h = await Hardware.findOne({ serial: req.body.code });
