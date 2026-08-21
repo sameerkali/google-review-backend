@@ -5,6 +5,7 @@ import Hardware from "../models/Hardware.js";
 import AnalyticsEvent from "../models/AnalyticsEvent.js";
 import ReviewSuggestion from "../models/ReviewSuggestion.js";
 import { adminAuth, signAdmin } from "../middleware/auth.js";
+import { hashPassword } from "../utils/password.js";
 import { ah } from "../utils/asyncHandler.js";
 
 const r = Router();
@@ -23,10 +24,11 @@ r.post("/login", (req, res) => {
 r.use(adminAuth);
 
 r.post("/business", ah(async (req, res) => {
-  const { serial, ...body } = req.body;
+  const { serial, password, ...body } = req.body;
   const serials = (Array.isArray(serial) ? serial : serial ? [serial] : [])
     .map((s) => String(s).trim())
     .filter(Boolean);
+  if (password) body.passwordHash = hashPassword(password);
 
   const b = await Business.create(body);
 
@@ -48,12 +50,21 @@ r.post("/business", ah(async (req, res) => {
     }
   }
 
-  res.status(201).json({ ...b.toObject(), hardwareAssigned, hardwareCreated });
+  // .create() returns the full document regardless of the schema's `select: false`
+  // on passwordHash (that only affects queries) — strip it before it goes out.
+  const obj = b.toObject();
+  delete obj.passwordHash;
+  res.status(201).json({ ...obj, hardwareAssigned, hardwareCreated });
 }));
 
 r.put("/business/:id", ah(async (req, res) => {
-  const b = await Business.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
-  return b ? res.json(b) : res.status(404).json({ error: "not found" });
+  const { password, ...body } = req.body;
+  if (password) body.passwordHash = hashPassword(password);
+  const b = await Business.findByIdAndUpdate(req.params.id, body, { new: true, runValidators: true });
+  if (!b) return res.status(404).json({ error: "not found" });
+  const obj = b.toObject();
+  delete obj.passwordHash;
+  res.json(obj);
 }));
 
 r.get("/business", ah(async (req, res) => {

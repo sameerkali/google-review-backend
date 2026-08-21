@@ -12,6 +12,9 @@ const businessSchema = new mongoose.Schema(
     planId: { type: mongoose.Schema.Types.ObjectId, ref: "Plan" },
     status: { type: String, enum: ["active", "suspended", "expired"], default: "active" },
     renewalDate: Date,
+    // Lets the business owner log into their own portal. Optional — set by an
+    // admin (onboarding wizard or Edit Business), never self-registered.
+    passwordHash: { type: String, select: false },
   },
   { timestamps: true }
 );

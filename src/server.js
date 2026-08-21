@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import mongoose from "mongoose";
 import adminRoutes from "./routes/admin.js";
+import businessRoutes from "./routes/business.js";
 import publicRoutes from "./routes/public.js";
 
 const app = express();
@@ -11,6 +12,7 @@ app.use(express.json());
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 app.use("/admin", adminRoutes);
+app.use("/business", businessRoutes);
 app.use("/", publicRoutes);
 
 // Central error handler — every route is wrapped with ah() so thrown/rejected
