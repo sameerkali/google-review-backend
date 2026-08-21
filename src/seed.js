@@ -5,9 +5,9 @@ import Hardware from "./models/Hardware.js";
 import ReviewSuggestion from "./models/ReviewSuggestion.js";
 
 const plans = [
-  { name: "Starter", billingType: "one_time", price: 999, features: { analytics: false, nfc: false } },
-  { name: "Basic", billingType: "monthly", price: 299, features: { analytics: true, nfc: false } },
-  { name: "Standard", billingType: "monthly", price: 499, features: { analytics: true, nfc: true } },
+  { name: "Basic", billingType: "monthly", price: 299, features: { analytics: "none", userData: false, suggestions: false } },
+  { name: "Starter", billingType: "monthly", price: 599, features: { analytics: "basic", userData: true, suggestions: false } },
+  { name: "Pro", billingType: "monthly", price: 999, features: { analytics: "full", userData: true, suggestions: true } },
 ];
 const hardware = [
   { type: "QR", serial: "QR000001" },

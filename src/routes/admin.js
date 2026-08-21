@@ -9,6 +9,9 @@ import { ah } from "../utils/asyncHandler.js";
 
 const r = Router();
 
+// Escapes regex metacharacters so a search string is matched literally.
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 r.post("/login", (req, res) => {
   const adminUser = process.env.ADMIN_USERNAME || "admin";
   const adminPass = process.env.ADMIN_PASSWORD || "admin";
@@ -54,8 +57,24 @@ r.put("/business/:id", ah(async (req, res) => {
 }));
 
 r.get("/business", ah(async (req, res) => {
-  const list = await Business.find().populate("planId").sort({ createdAt: -1 });
-  res.json(list);
+  const { page, limit = "25", search } = req.query;
+  const q = search
+    ? { $or: ["name", "email", "phone"].map((f) => ({ [f]: new RegExp(escapeRegex(search), "i") })) }
+    : {};
+
+  // No `page` → full list, unfiltered (used to bootstrap dropdowns elsewhere in the admin panel).
+  if (!page) {
+    const list = await Business.find().populate("planId").sort({ createdAt: -1 });
+    return res.json(list);
+  }
+
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 25));
+  const [total, data] = await Promise.all([
+    Business.countDocuments(q),
+    Business.find(q).populate("planId").sort({ createdAt: -1 }).skip((pageNum - 1) * limitNum).limit(limitNum),
+  ]);
+  res.json({ data, page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) });
 }));
 
 r.delete("/business/:id", ah(async (req, res) => {
@@ -76,8 +95,24 @@ r.post("/hardware", ah(async (req, res) => {
 }));
 
 r.get("/hardware", ah(async (req, res) => {
-  const list = await Hardware.find().populate("assignedBusinessId").sort({ createdAt: -1 });
-  res.json(list);
+  const { page, limit = "25", search } = req.query;
+  const q = search
+    ? { $or: ["serial", "type"].map((f) => ({ [f]: new RegExp(escapeRegex(search), "i") })) }
+    : {};
+
+  // No `page` → full list, unfiltered (used to bootstrap dropdowns elsewhere in the admin panel).
+  if (!page) {
+    const list = await Hardware.find().populate("assignedBusinessId").sort({ createdAt: -1 });
+    return res.json(list);
+  }
+
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 25));
+  const [total, data] = await Promise.all([
+    Hardware.countDocuments(q),
+    Hardware.find(q).populate("assignedBusinessId").sort({ createdAt: -1 }).skip((pageNum - 1) * limitNum).limit(limitNum),
+  ]);
+  res.json({ data, page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) });
 }));
 
 r.put("/hardware/:id", ah(async (req, res) => {
@@ -112,6 +147,14 @@ r.put("/plans/:id", ah(async (req, res) => {
 }));
 
 r.get("/plans", ah(async (_req, res) => res.json(await Plan.find())));
+
+r.delete("/plans/:id", ah(async (req, res) => {
+  await Plan.findByIdAndDelete(req.params.id);
+  // Free up any business that was on this plan — otherwise it's left pointing
+  // at a plan that no longer exists.
+  await Business.updateMany({ planId: req.params.id }, { planId: null });
+  res.json({ ok: true });
+}));
 
 r.post("/review-suggestions", ah(async (req, res) => {
   const s = await ReviewSuggestion.create(req.body);
