@@ -241,18 +241,33 @@ r.post("/review-suggestions/bulk", ah(async (req, res) => {
 }));
 
 r.get("/analytics", ah(async (req, res) => {
+  const { businessId, page, limit = "50", sort = "desc" } = req.query;
   const q = {};
-  if (req.query.businessId) q.businessId = req.query.businessId;
-  const rows = await AnalyticsEvent.find(q).sort({ createdAt: -1 }).limit(500);
-  const summary = {
-    total: rows.length,
-    byType: {
-      scan: rows.filter((x) => x.eventType === "scan").length,
-      google_click: rows.filter((x) => x.eventType === "google_click").length,
-      review_copy: rows.filter((x) => x.eventType === "review_copy").length,
-    },
-  };
-  res.json({ summary, rows });
+  if (businessId) q.businessId = businessId;
+  const sortDir = sort === "asc" ? 1 : -1;
+
+  const [total, scan, google_click, review_copy] = await Promise.all([
+    AnalyticsEvent.countDocuments(q),
+    AnalyticsEvent.countDocuments({ ...q, eventType: "scan" }),
+    AnalyticsEvent.countDocuments({ ...q, eventType: "google_click" }),
+    AnalyticsEvent.countDocuments({ ...q, eventType: "review_copy" }),
+  ]);
+  const summary = { total, byType: { scan, google_click, review_copy } };
+
+  // No `page` → old capped-list shape, kept for any caller that doesn't paginate.
+  if (!page) {
+    const rows = await AnalyticsEvent.find(q).sort({ createdAt: sortDir }).limit(500);
+    return res.json({ summary, rows });
+  }
+
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const limitNum = Math.min(200, Math.max(1, parseInt(limit, 10) || 50));
+  const data = await AnalyticsEvent.find(q)
+    .populate("businessId")
+    .sort({ createdAt: sortDir })
+    .skip((pageNum - 1) * limitNum)
+    .limit(limitNum);
+  res.json({ summary, data, page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) });
 }));
 
 r.get("/overview", ah(async (_req, res) => {
