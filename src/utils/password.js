@@ -17,3 +17,15 @@ export function verifyPassword(password, stored) {
   const b = Buffer.from(check, "hex");
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
+
+// Constant-time string comparison for the admin login's plain-env-var
+// credentials, so a wrong guess can't be timed to learn how much it matched.
+export function safeEqual(input, expected) {
+  const a = Buffer.from(String(input ?? ""));
+  const b = Buffer.from(String(expected ?? ""));
+  if (a.length !== b.length) {
+    crypto.timingSafeEqual(b, b); // constant-time no-op — avoids a length-based timing signal
+    return false;
+  }
+  return crypto.timingSafeEqual(a, b);
+}

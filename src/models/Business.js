@@ -19,4 +19,7 @@ const businessSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Looked up when a plan is deleted (Business.updateMany({ planId }, ...)).
+businessSchema.index({ planId: 1 });
+
 export default mongoose.model("Business", businessSchema);

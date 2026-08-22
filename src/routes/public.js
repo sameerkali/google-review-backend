@@ -5,8 +5,10 @@ import Business from "../models/Business.js";
 import ReviewSuggestion from "../models/ReviewSuggestion.js";
 import AnalyticsEvent from "../models/AnalyticsEvent.js";
 import { ah } from "../utils/asyncHandler.js";
+import { publicLimiter } from "../middleware/rateLimit.js";
 
 const r = Router();
+r.use(publicLimiter);
 
 const uaInfo = (req) => {
   const ua = (req.headers["user-agent"] || "").toLowerCase();
@@ -18,20 +20,25 @@ const uaInfo = (req) => {
 };
 
 r.get("/r/:code", ah(async (req, res) => {
-  const h = await Hardware.findOne({ serial: req.params.code }).populate("assignedBusinessId");
+  const h = await Hardware.findOne({ serial: req.params.code }).populate("assignedBusinessId").lean();
   if (!h || !h.assignedBusinessId) return res.status(404).json({ error: "invalid code" });
   const b = h.assignedBusinessId;
 
-  // Reserve up to 3 unused suggestions at once
-  const suggestions = await ReviewSuggestion.find({ businessId: b._id, status: "unused" }).limit(3);
+  // Atomically claim up to 3 unused suggestions. Each findOneAndUpdate flips
+  // exactly one doc from unused -> reserved as a single atomic op, so two
+  // concurrent scans of the same code can never claim the same suggestion
+  // (the previous find-then-save version could race and double-reserve).
   const now = new Date();
-  await Promise.all(
-    suggestions.map((s) => {
-      s.status = "reserved";
-      s.reservedAt = now;
-      return s.save();
-    })
+  const claims = await Promise.all(
+    [0, 1, 2].map(() =>
+      ReviewSuggestion.findOneAndUpdate(
+        { businessId: b._id, status: "unused" },
+        { $set: { status: "reserved", reservedAt: now } },
+        { new: true }
+      ).lean()
+    )
   );
+  const suggestions = claims.filter(Boolean);
 
   res.json({
     business: { name: b.name, logoUrl: b.logoUrl, googleReviewUrl: b.googleReviewUrl },
@@ -42,8 +49,8 @@ r.get("/r/:code", ah(async (req, res) => {
 
 
 const event = (eventType) => ah(async (req, res) => {
-  const h = await Hardware.findOne({ serial: req.body.code });
-  const b = h ? await Business.findById(h.assignedBusinessId) : null;
+  const h = await Hardware.findOne({ serial: req.body.code }).lean();
+  const b = h ? await Business.findById(h.assignedBusinessId).lean() : null;
   if (!b) return res.status(404).json({ error: "unknown code" });
   await AnalyticsEvent.create({
     businessId: b._id,

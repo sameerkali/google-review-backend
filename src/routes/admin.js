@@ -1,22 +1,25 @@
 import { Router } from "express";
+import mongoose from "mongoose";
 import Business from "../models/Business.js";
 import Plan from "../models/Plan.js";
 import Hardware from "../models/Hardware.js";
 import AnalyticsEvent from "../models/AnalyticsEvent.js";
 import ReviewSuggestion from "../models/ReviewSuggestion.js";
 import { adminAuth, signAdmin } from "../middleware/auth.js";
-import { hashPassword } from "../utils/password.js";
+import { hashPassword, safeEqual } from "../utils/password.js";
 import { ah } from "../utils/asyncHandler.js";
+import { authLimiter } from "../middleware/rateLimit.js";
 
 const r = Router();
 
 // Escapes regex metacharacters so a search string is matched literally.
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-r.post("/login", (req, res) => {
+r.post("/login", authLimiter, (req, res) => {
   const adminUser = process.env.ADMIN_USERNAME || "admin";
   const adminPass = process.env.ADMIN_PASSWORD || "admin";
-  return req.body.username === adminUser && req.body.password === adminPass
+  const ok = safeEqual(req.body.username, adminUser) && safeEqual(req.body.password, adminPass);
+  return ok
     ? res.json({ token: signAdmin() })
     : res.status(401).json({ error: "invalid username or password" });
 });
@@ -75,7 +78,7 @@ r.get("/business", ah(async (req, res) => {
 
   // No `page` → full list, unfiltered (used to bootstrap dropdowns elsewhere in the admin panel).
   if (!page) {
-    const list = await Business.find().populate("planId").sort({ createdAt: -1 });
+    const list = await Business.find().populate("planId").sort({ createdAt: -1 }).lean();
     return res.json(list);
   }
 
@@ -83,7 +86,7 @@ r.get("/business", ah(async (req, res) => {
   const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 25));
   const [total, data] = await Promise.all([
     Business.countDocuments(q),
-    Business.find(q).populate("planId").sort({ createdAt: -1 }).skip((pageNum - 1) * limitNum).limit(limitNum),
+    Business.find(q).populate("planId").sort({ createdAt: -1 }).skip((pageNum - 1) * limitNum).limit(limitNum).lean(),
   ]);
   res.json({ data, page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) });
 }));
@@ -113,7 +116,7 @@ r.get("/hardware", ah(async (req, res) => {
 
   // No `page` → full list, unfiltered (used to bootstrap dropdowns elsewhere in the admin panel).
   if (!page) {
-    const list = await Hardware.find().populate("assignedBusinessId").sort({ createdAt: -1 });
+    const list = await Hardware.find().populate("assignedBusinessId").sort({ createdAt: -1 }).lean();
     return res.json(list);
   }
 
@@ -121,14 +124,15 @@ r.get("/hardware", ah(async (req, res) => {
   const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 25));
   const [total, data] = await Promise.all([
     Hardware.countDocuments(q),
-    Hardware.find(q).populate("assignedBusinessId").sort({ createdAt: -1 }).skip((pageNum - 1) * limitNum).limit(limitNum),
+    Hardware.find(q).populate("assignedBusinessId").sort({ createdAt: -1 }).skip((pageNum - 1) * limitNum).limit(limitNum).lean(),
   ]);
   res.json({ data, page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) });
 }));
 
 r.put("/hardware/:id", ah(async (req, res) => {
   const h = await Hardware.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
-    .populate("assignedBusinessId");
+    .populate("assignedBusinessId")
+    .lean();
   return h ? res.json(h) : res.status(404).json({ error: "not found" });
 }));
 
@@ -172,9 +176,23 @@ r.post("/review-suggestions", ah(async (req, res) => {
   res.status(201).json(s);
 }));
 
-r.get("/review-suggestions", ah(async (_req, res) =>
-  res.json(await ReviewSuggestion.find().populate("businessId").sort({ createdAt: -1 }))
-));
+r.get("/review-suggestions", ah(async (req, res) => {
+  const { page, limit = "25" } = req.query;
+
+  // No `page` → full list, unfiltered (kept for existing callers of this endpoint).
+  if (!page) {
+    const list = await ReviewSuggestion.find().populate("businessId").sort({ createdAt: -1 }).lean();
+    return res.json(list);
+  }
+
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 25));
+  const [total, data] = await Promise.all([
+    ReviewSuggestion.countDocuments(),
+    ReviewSuggestion.find().populate("businessId").sort({ createdAt: -1 }).skip((pageNum - 1) * limitNum).limit(limitNum).lean(),
+  ]);
+  res.json({ data, page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) });
+}));
 
 // Returns each business that has at least one review, with counts by status.
 r.get("/reviews/businesses", ah(async (_req, res) => {
@@ -217,7 +235,7 @@ r.get("/reviews", ah(async (req, res) => {
   if (status) q.status = status;
   const [total, data] = await Promise.all([
     ReviewSuggestion.countDocuments(q),
-    ReviewSuggestion.find(q).sort({ createdAt: -1 }).skip((pageNum - 1) * limitNum).limit(limitNum),
+    ReviewSuggestion.find(q).sort({ createdAt: -1 }).skip((pageNum - 1) * limitNum).limit(limitNum).lean(),
   ]);
   res.json({ data, page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) });
 }));
@@ -254,20 +272,35 @@ r.post("/review-suggestions/bulk", ah(async (req, res) => {
 r.get("/analytics", ah(async (req, res) => {
   const { businessId, page, limit = "50", sort = "desc" } = req.query;
   const q = {};
-  if (businessId) q.businessId = businessId;
+  if (businessId) {
+    // .aggregate() doesn't auto-cast query values the way .find()/.countDocuments()
+    // do, so replicate the same CastError the rest of the API returns on a bad id.
+    if (!mongoose.isValidObjectId(businessId)) {
+      const err = new Error(`Cast to ObjectId failed for value "${businessId}" at path "businessId"`);
+      err.name = "CastError";
+      err.path = "businessId";
+      throw err;
+    }
+    q.businessId = new mongoose.Types.ObjectId(businessId);
+  }
   const sortDir = sort === "asc" ? 1 : -1;
 
-  const [total, scan, google_click, review_copy] = await Promise.all([
-    AnalyticsEvent.countDocuments(q),
-    AnalyticsEvent.countDocuments({ ...q, eventType: "scan" }),
-    AnalyticsEvent.countDocuments({ ...q, eventType: "google_click" }),
-    AnalyticsEvent.countDocuments({ ...q, eventType: "review_copy" }),
+  // Single grouped aggregation instead of 4 separate countDocuments round trips.
+  const counts = await AnalyticsEvent.aggregate([
+    { $match: q },
+    { $group: { _id: "$eventType", count: { $sum: 1 } } },
   ]);
-  const summary = { total, byType: { scan, google_click, review_copy } };
+  const byType = { scan: 0, google_click: 0, review_copy: 0 };
+  let total = 0;
+  for (const c of counts) {
+    if (c._id in byType) byType[c._id] = c.count;
+    total += c.count;
+  }
+  const summary = { total, byType };
 
   // No `page` → old capped-list shape, kept for any caller that doesn't paginate.
   if (!page) {
-    const rows = await AnalyticsEvent.find(q).sort({ createdAt: sortDir }).limit(500);
+    const rows = await AnalyticsEvent.find(q).sort({ createdAt: sortDir }).limit(500).lean();
     return res.json({ summary, rows });
   }
 
@@ -277,7 +310,8 @@ r.get("/analytics", ah(async (req, res) => {
     .populate("businessId")
     .sort({ createdAt: sortDir })
     .skip((pageNum - 1) * limitNum)
-    .limit(limitNum);
+    .limit(limitNum)
+    .lean();
   res.json({ summary, data, page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) });
 }));
 

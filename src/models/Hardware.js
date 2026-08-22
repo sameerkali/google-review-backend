@@ -14,4 +14,7 @@ const hardwareSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Looked up on every /business/me/qr, /admin/assign, and business-delete cleanup.
+hardwareSchema.index({ assignedBusinessId: 1 });
+
 export default mongoose.model("Hardware", hardwareSchema);

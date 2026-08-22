@@ -17,4 +17,6 @@ const eventSchema = new mongoose.Schema(
 );
 
 eventSchema.index({ businessId: 1, createdAt: -1 });
+// Covers the per-eventType counts run on every admin/business analytics load.
+eventSchema.index({ businessId: 1, eventType: 1 });
 export default mongoose.model("AnalyticsEvent", eventSchema);
