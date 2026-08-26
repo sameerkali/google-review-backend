@@ -7,6 +7,16 @@ const businessSchema = new mongoose.Schema(
     phone: String,
     email: { type: String, required: true, unique: true },
     address: String,
+    city: String,
+    // Frontend already validates the http(s):// prefix before sending, but
+    // that's not something the server should rely on to hold.
+    website: {
+      type: String,
+      validate: {
+        validator: (v) => !v || /^https?:\/\//i.test(v),
+        message: "website must start with http:// or https://",
+      },
+    },
     googleReviewUrl: String,
     logoUrl: String,
     planId: { type: mongoose.Schema.Types.ObjectId, ref: "Plan" },
