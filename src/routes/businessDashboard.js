@@ -364,4 +364,57 @@ r.get("/suggestions", ah(async (req, res) => {
   res.json({ suggestions: suggestions.slice(0, 3) });
 }));
 
+// One bundled payload per range for the PDF report — the frontend calls this
+// once per range (7d/30d/90d) instead of hitting five separate endpoints
+// three times each. Same tier gate as everything else; full-tier sections
+// are simply omitted for a basic plan rather than 403ing the whole report.
+r.get("/report", ah(async (req, res) => {
+  const business = await requireTier(req, res, "basic");
+  if (!business) return;
+  const tier = business.planId?.features?.analytics || "basic";
+
+  const { dayDocs, prevDocs } = await getRangeData(req.businessId, req.query.range);
+  const cur = sumDocs(dayDocs);
+  const prev = sumDocs(prevDocs);
+  const hasPrev = prevDocs.length > 0;
+
+  const payload = {
+    range: req.query.range && RANGE_DAYS[req.query.range] ? req.query.range : "30d",
+    business: { name: business.name },
+    tier,
+    summary: {
+      reviewsStarted: { value: cur.rated, prev: hasPrev ? prev.rated : null },
+      avgRating: { value: avgOf(cur.ratingSum, cur.ratingCount), ratingCount: cur.ratingCount },
+      googleClicks: { value: cur.clicked, prev: hasPrev ? prev.clicked : null },
+      completionRate: { value: cur.scans ? +(cur.clicked / cur.scans * 100).toFixed(1) : 0 },
+    },
+    distribution: cur.ratingDist,
+    funnel: [
+      { key: "scans", label: "Scans", value: cur.scans },
+      { key: "rated", label: "Rated", value: cur.rated },
+      { key: "drafted", label: "Drafted", value: cur.drafted },
+      { key: "copied", label: "Copied", value: cur.copied },
+      { key: "clicked", label: "Google clicked", value: cur.clicked },
+    ],
+  };
+
+  if (tier === "full") {
+    const itemIds = [...cur.itemsMap.keys()];
+    const menuItems = itemIds.length ? await MenuItem.find({ _id: { $in: itemIds } }).select("name").lean() : [];
+    const nameMap = new Map(menuItems.map((m) => [String(m._id), m.name]));
+    payload.menu = itemIds
+      .map((id) => {
+        const c = cur.itemsMap.get(id);
+        return { name: nameMap.get(id) || "Unknown item", mentions: c.mentions, avgRating: avgOf(c.ratingSum, c.ratingCount) };
+      })
+      .sort((a, b) => b.mentions - a.mentions);
+
+    payload.aspects = [...cur.aspectsMap.entries()]
+      .map(([aspect, v]) => ({ aspect, total: v.total, lowRated: v.lowRated, highRated: v.highRated }))
+      .sort((a, b) => b.total - a.total);
+  }
+
+  res.json(payload);
+}));
+
 export default r;
