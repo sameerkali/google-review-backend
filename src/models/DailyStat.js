@@ -15,6 +15,10 @@ const dailyStatSchema = new mongoose.Schema({
   drafted: { type: Number, default: 0 },
   copied: { type: Number, default: 0 },
   clicked: { type: Number, default: 0 },
+  // Of the sessions that got copied, how many were edited from the
+  // auto-generated draft first — a quality signal on the draft engine
+  // itself, not just on the business.
+  draftEditedCount: { type: Number, default: 0 },
 
   ratingSum: { type: Number, default: 0 },
   ratingCount: { type: Number, default: 0 },
@@ -44,6 +48,14 @@ const dailyStatSchema = new mongoose.Schema({
     android: { type: Number, default: 0 },
     ios: { type: Number, default: 0 },
     other: { type: Number, default: 0 },
+  },
+
+  // Which physical hardware the scan came from — the same "QR vs NFC" split
+  // an admin already sees per unit in Hardware, rolled up per business/day.
+  referrer: {
+    qr: { type: Number, default: 0 },
+    nfc: { type: Number, default: 0 },
+    direct: { type: Number, default: 0 },
   },
 });
 

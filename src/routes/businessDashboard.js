@@ -69,13 +69,14 @@ async function getRangeData(businessId, rangeParam) {
 
 function emptyTotals() {
   return {
-    scans: 0, rated: 0, drafted: 0, copied: 0, clicked: 0,
+    scans: 0, rated: 0, drafted: 0, copied: 0, clicked: 0, draftEditedCount: 0,
     ratingSum: 0, ratingCount: 0,
     ratingDist: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
     byHour: Array.from({ length: 24 }, (_, hour) => ({ hour, sessions: 0, ratingSum: 0, ratingCount: 0 })),
     itemsMap: new Map(),
     aspectsMap: new Map(),
     devices: { android: 0, ios: 0, other: 0 },
+    referrer: { qr: 0, nfc: 0, direct: 0 },
   };
 }
 
@@ -91,6 +92,7 @@ function sumDocs(docs) {
     t.drafted += d.drafted || 0;
     t.copied += d.copied || 0;
     t.clicked += d.clicked || 0;
+    t.draftEditedCount += d.draftEditedCount || 0;
     t.ratingSum += d.ratingSum || 0;
     t.ratingCount += d.ratingCount || 0;
     for (const k of [1, 2, 3, 4, 5]) t.ratingDist[k] += d.ratingDist?.[k] || 0;
@@ -117,6 +119,7 @@ function sumDocs(docs) {
       t.aspectsMap.set(a.aspect, e);
     }
     for (const dk of ["android", "ios", "other"]) t.devices[dk] += d.devices?.[dk] || 0;
+    for (const rk of ["qr", "nfc", "direct"]) t.referrer[rk] += d.referrer?.[rk] || 0;
   }
   return t;
 }
@@ -152,6 +155,15 @@ r.get("/summary", ah(async (req, res) => {
     avgRating: { value: avgOf(cur.ratingSum, cur.ratingCount), ratingCount: cur.ratingCount, prev: hasPrev ? avgOf(prev.ratingSum, prev.ratingCount) : null, prevRatingCount: prev.ratingCount },
     googleClicks: { value: cur.clicked, prev: hasPrev ? prev.clicked : null },
     completionRate: { value: cur.scans ? +(cur.clicked / cur.scans * 100).toFixed(1) : 0, prev: hasPrev && prev.scans ? +(prev.clicked / prev.scans * 100).toFixed(1) : null },
+    // Of the sessions that got copied, how many the customer edited first —
+    // a quality signal on the draft engine, not on the business. Null (not
+    // 0) with no copies yet, same "don't show a number that isn't real yet"
+    // rule as avgRating below 5 ratings.
+    draftEditRate: {
+      value: cur.copied ? +(cur.draftEditedCount / cur.copied * 100).toFixed(1) : null,
+      copiedCount: cur.copied,
+      prev: hasPrev && prev.copied ? +(prev.draftEditedCount / prev.copied * 100).toFixed(1) : null,
+    },
     recentActivity: await getRecentActivity(req.businessId),
   });
 }));
@@ -205,7 +217,11 @@ r.get("/timing", ah(async (req, res) => {
 r.get("/devices", ah(async (req, res) => {
   if (!(await requireTier(req, res, "basic"))) return;
   const { dayDocs } = await getRangeData(req.businessId, req.query.range);
-  res.json({ devices: sumDocs(dayDocs).devices });
+  const t = sumDocs(dayDocs);
+  // Same request as the phone/OS split — one already-computed field, no
+  // extra round trip for what's really the same "where did this scan come
+  // from" question (device vs hardware).
+  res.json({ devices: t.devices, referrer: t.referrer });
 }));
 
 // ── Full tier ────────────────────────────────────────────────────────────────
@@ -387,6 +403,7 @@ r.get("/report", ah(async (req, res) => {
       avgRating: { value: avgOf(cur.ratingSum, cur.ratingCount), ratingCount: cur.ratingCount },
       googleClicks: { value: cur.clicked, prev: hasPrev ? prev.clicked : null },
       completionRate: { value: cur.scans ? +(cur.clicked / cur.scans * 100).toFixed(1) : 0 },
+      draftEditRate: { value: cur.copied ? +(cur.draftEditedCount / cur.copied * 100).toFixed(1) : null },
     },
     distribution: cur.ratingDist,
     funnel: [
@@ -396,6 +413,7 @@ r.get("/report", ah(async (req, res) => {
       { key: "copied", label: "Copied", value: cur.copied },
       { key: "clicked", label: "Google clicked", value: cur.clicked },
     ],
+    referrer: cur.referrer,
   };
 
   if (tier === "full") {

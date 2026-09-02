@@ -36,6 +36,7 @@ export async function computeStats(businessId, from, to) {
     drafted: 0,
     copied: 0,
     clicked: 0,
+    draftEditedCount: 0,
     ratingSum: 0,
     ratingCount: 0,
     ratingDist: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
@@ -43,6 +44,7 @@ export async function computeStats(businessId, from, to) {
     items: [],
     aspects: [],
     devices: { android: 0, ios: 0, other: 0 },
+    referrer: { qr: 0, nfc: 0, direct: 0 },
   };
 
   const itemMap = new Map(); // menuItemId -> { mentions, ratingSum, ratingCount }
@@ -53,9 +55,13 @@ export async function computeStats(businessId, from, to) {
     doc.byHour[hour].sessions += 1;
 
     if (s.draftGenerated) doc.drafted += 1;
-    if (s.copiedAt) doc.copied += 1;
+    if (s.copiedAt) {
+      doc.copied += 1;
+      if (s.draftEdited) doc.draftEditedCount += 1;
+    }
     if (s.googleClickedAt) doc.clicked += 1;
     doc.devices[classifyDevice(s.device?.os)] += 1;
+    doc.referrer[s.referrerType === "nfc" || s.referrerType === "direct" ? s.referrerType : "qr"] += 1;
 
     if (typeof s.rating === "number" && s.rating >= 1 && s.rating <= 5) {
       doc.rated += 1;
