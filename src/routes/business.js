@@ -1,8 +1,6 @@
 import { Router } from "express";
-import mongoose from "mongoose";
 import Business from "../models/Business.js";
 import Hardware from "../models/Hardware.js";
-import AnalyticsEvent from "../models/AnalyticsEvent.js";
 import MenuItem from "../models/MenuItem.js";
 import { businessAuth, signBusiness } from "../middleware/auth.js";
 import { verifyPassword } from "../utils/password.js";
@@ -53,73 +51,8 @@ r.delete("/me/menu-items/:id", ah(async (req, res) => {
   return deleted ? res.json({ ok: true }) : res.status(404).json({ error: "not found" });
 }));
 
-r.get("/me/analytics", ah(async (req, res) => {
-  const business = await Business.findById(req.businessId).populate("planId").lean();
-  const features = business?.planId?.features || { analytics: "none", userData: false };
-  if (features.analytics === "none") {
-    return res.status(403).json({ error: "Your plan doesn't include analytics — upgrade to see how your QR is performing." });
-  }
-
-  // .aggregate() doesn't auto-cast query values the way .find()/.countDocuments() do,
-  // so the businessId must be cast to ObjectId explicitly for $match to hit the index.
-  const q = { businessId: new mongoose.Types.ObjectId(req.businessId) };
-  // Single grouped aggregation instead of 4 separate countDocuments round trips.
-  const counts = await AnalyticsEvent.aggregate([
-    { $match: q },
-    { $group: { _id: "$eventType", count: { $sum: 1 } } },
-  ]);
-  const byType = { scan: 0, google_click: 0, review_copy: 0 };
-  let total = 0;
-  for (const c of counts) {
-    if (c._id in byType) byType[c._id] = c.count;
-    total += c.count;
-  }
-  const payload = {
-    level: features.analytics,
-    summary: { total, byType, conversionRate: byType.scan ? Math.round((byType.google_click / byType.scan) * 100) : 0 },
-  };
-
-  if (features.analytics === "full") {
-    const byField = (field) => AnalyticsEvent.aggregate([{ $match: q }, { $group: { _id: `$${field}`, count: { $sum: 1 } } }, { $sort: { count: -1 } }]);
-    const [device, browser, os] = await Promise.all([byField("device"), byField("browser"), byField("os")]);
-    payload.breakdown = { device, browser, os };
-  }
-
-  if (features.userData) {
-    payload.recentEvents = await AnalyticsEvent.find(q).sort({ createdAt: -1 }).limit(50).select("eventType device browser os createdAt").lean();
-  }
-
-  res.json(payload);
-}));
-
-r.get("/me/suggestions", ah(async (req, res) => {
-  const business = await Business.findById(req.businessId).populate("planId").lean();
-  if (!business?.planId?.features?.suggestions) {
-    return res.status(403).json({ error: "Your plan doesn't include growth suggestions — upgrade to Pro to unlock this." });
-  }
-
-  const q = { businessId: new mongoose.Types.ObjectId(req.businessId) };
-  // Single grouped aggregation for the two AnalyticsEvent counts instead of 2 round trips.
-  const [eventCounts, menuItemCount, hardwareCount] = await Promise.all([
-    AnalyticsEvent.aggregate([{ $match: q }, { $group: { _id: "$eventType", count: { $sum: 1 } } }]),
-    MenuItem.countDocuments({ businessId: req.businessId, active: true }),
-    Hardware.countDocuments({ assignedBusinessId: req.businessId }),
-  ]);
-  const byType = { scan: 0, google_click: 0 };
-  for (const c of eventCounts) if (c._id in byType) byType[c._id] = c.count;
-  const scans = byType.scan;
-  const clicks = byType.google_click;
-
-  // Simple rule-based tips from the business's own numbers — no ML, just
-  // thresholds on data we already have, gated behind the Pro-only feature flag.
-  const tips = [];
-  if (scans === 0) tips.push("No scans yet — make sure your QR code or table tent is visible and well-lit near checkout.");
-  if (scans > 0 && clicks / scans < 0.5) tips.push(`Only ${Math.round((clicks / scans) * 100)}% of scans lead to a Google review — try shortening the flow or moving the code somewhere more visible.`);
-  if (menuItemCount < 5) tips.push(`You have ${menuItemCount} menu item${menuItemCount === 1 ? "" : "s"} listed — adding more gives customers a better chance of finding what they ordered.`);
-  if (hardwareCount < 2) tips.push("You only have one QR/NFC code active — a second one (e.g. at the table and at checkout) catches more customers.");
-  if (!tips.length) tips.push("You're doing well across the board — keep an eye on your conversion rate as scan volume grows.");
-
-  res.json({ tips });
-}));
+// Analytics and growth suggestions now live under /business/dashboard/* —
+// see routes/businessDashboard.js — sourced from feedbackSessions/dailyStats
+// instead of the old scan/click event counts.
 
 export default r;

@@ -11,5 +11,11 @@
       "source": "/(.*)",
       "destination": "src/server.js"
     }
+  ],
+  "crons": [
+    {
+      "path": "/internal/cron/daily-stats",
+      "schedule": "0 2 * * *"
+    }
   ]
 }
