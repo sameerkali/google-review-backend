@@ -4,7 +4,7 @@ import Business from "../models/Business.js";
 import Plan from "../models/Plan.js";
 import Hardware from "../models/Hardware.js";
 import AnalyticsEvent from "../models/AnalyticsEvent.js";
-import ReviewSuggestion from "../models/ReviewSuggestion.js";
+import MenuItem from "../models/MenuItem.js";
 import { adminAuth, signAdmin } from "../middleware/auth.js";
 import { hashPassword, safeEqual } from "../utils/password.js";
 import { ah } from "../utils/asyncHandler.js";
@@ -99,6 +99,9 @@ r.delete("/business/:id", ah(async (req, res) => {
     { assignedBusinessId: req.params.id },
     { assignedBusinessId: null, status: "available" }
   );
+  // The menu is meaningless without its business — remove it with them
+  // (matches the "menu will be permanently removed" warning shown in the admin UI).
+  await MenuItem.deleteMany({ businessId: req.params.id });
   res.json({ ok: true });
 }));
 
@@ -171,91 +174,68 @@ r.delete("/plans/:id", ah(async (req, res) => {
   res.json({ ok: true });
 }));
 
-r.post("/review-suggestions", ah(async (req, res) => {
-  const s = await ReviewSuggestion.create(req.body);
-  res.status(201).json(s);
+r.post("/menu-items", ah(async (req, res) => {
+  const m = await MenuItem.create(req.body);
+  res.status(201).json(m);
 }));
 
-r.get("/review-suggestions", ah(async (req, res) => {
-  const { page, limit = "25" } = req.query;
-
-  // No `page` → full list, unfiltered (kept for existing callers of this endpoint).
-  if (!page) {
-    const list = await ReviewSuggestion.find().populate("businessId").sort({ createdAt: -1 }).lean();
-    return res.json(list);
-  }
-
-  const pageNum = Math.max(1, parseInt(page, 10) || 1);
-  const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 25));
-  const [total, data] = await Promise.all([
-    ReviewSuggestion.countDocuments(),
-    ReviewSuggestion.find().populate("businessId").sort({ createdAt: -1 }).skip((pageNum - 1) * limitNum).limit(limitNum).lean(),
-  ]);
-  res.json({ data, page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) });
+r.put("/menu-items/:id", ah(async (req, res) => {
+  const m = await MenuItem.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+  return m ? res.json(m) : res.status(404).json({ error: "not found" });
 }));
 
-// Returns each business that has at least one review, with counts by status.
-r.get("/reviews/businesses", ah(async (_req, res) => {
-  const agg = await ReviewSuggestion.aggregate([
-    { $group: { _id: { businessId: "$businessId", status: "$status" }, count: { $sum: 1 } } },
+r.delete("/menu-items/:id", ah(async (req, res) => {
+  await MenuItem.findByIdAndDelete(req.params.id);
+  res.json({ ok: true });
+}));
+
+// Returns each business that has at least one menu item, with active/total counts.
+r.get("/menu-items/businesses", ah(async (_req, res) => {
+  const agg = await MenuItem.aggregate([
     { $group: {
-      _id: "$_id.businessId",
-      total: { $sum: "$count" },
-      byStatus: { $push: { status: "$_id.status", count: "$count" } },
+      _id: "$businessId",
+      total: { $sum: 1 },
+      active: { $sum: { $cond: ["$active", 1, 0] } },
     }},
     { $lookup: { from: "businesses", localField: "_id", foreignField: "_id", as: "biz" } },
     { $unwind: { path: "$biz", preserveNullAndEmptyArrays: true } },
-    { $project: {
-      _id: 1,
-      name: "$biz.name",
-      email: "$biz.email",
-      status: "$biz.status",
-      total: 1,
-      byStatus: 1,
-    }},
+    { $project: { _id: 1, name: "$biz.name", email: "$biz.email", status: "$biz.status", total: 1, active: 1 } },
     { $sort: { total: -1 } },
   ]);
-  // flatten byStatus array into named keys for easy consumption
-  const result = agg.map(({ byStatus, ...rest }) => ({
-    ...rest,
-    unused:   byStatus.find((s) => s.status === "unused")?.count  || 0,
-    reserved: byStatus.find((s) => s.status === "reserved")?.count || 0,
-    used:     byStatus.find((s) => s.status === "used")?.count     || 0,
-  }));
-  res.json(result);
+  res.json(agg);
 }));
 
-// Paginated reviews for a specific business.
-r.get("/reviews", ah(async (req, res) => {
-  const { businessId, status, page = "1", limit = "25" } = req.query;
+// Full menu for a specific business (no pagination — a menu is a short list).
+r.get("/menu-items", ah(async (req, res) => {
+  const { businessId } = req.query;
   if (!businessId) return res.status(400).json({ error: "businessId required" });
-  const pageNum  = Math.max(1, parseInt(page, 10)  || 1);
-  const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 25));
-  const q = { businessId };
-  if (status) q.status = status;
-  const [total, data] = await Promise.all([
-    ReviewSuggestion.countDocuments(q),
-    ReviewSuggestion.find(q).sort({ createdAt: -1 }).skip((pageNum - 1) * limitNum).limit(limitNum).lean(),
-  ]);
-  res.json({ data, page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) });
+  const items = await MenuItem.find({ businessId }).sort({ sortOrder: 1, name: 1 }).lean();
+  res.json(items);
 }));
 
-r.post("/review-suggestions/bulk", ah(async (req, res) => {
+r.post("/menu-items/bulk", ah(async (req, res) => {
   const items = Array.isArray(req.body) ? req.body : req.body.items;
   if (!Array.isArray(items) || !items.length) {
     return res.status(400).json({ error: "Provide a non-empty items array" });
   }
 
+  // `id` is accepted and ignored if present (a JSON export's own id, not
+  // ours — Mongo assigns its own _id on insert).
   const docs = items
-    .filter((it) => it && it.businessId && String(it.reviewText || "").trim())
-    .map((it) => ({ businessId: it.businessId, reviewText: String(it.reviewText).trim() }));
+    .filter((it) => it && it.businessId && String(it.name || "").trim())
+    .map((it) => ({
+      businessId: it.businessId,
+      name: String(it.name).trim(),
+      category: it.category || undefined,
+      price: it.price !== undefined && it.price !== null && !isNaN(Number(it.price)) ? Number(it.price) : undefined,
+    }));
   const skipped = items.length - docs.length;
   if (!docs.length) {
-    return res.status(400).json({ error: "No valid items — each entry needs a businessId and reviewText" });
+    return res.status(400).json({ error: "No valid items — each entry needs a businessId and name" });
   }
 
   try {
-    const created = await ReviewSuggestion.insertMany(docs, { ordered: false });
+    const created = await MenuItem.insertMany(docs, { ordered: false });
     res.status(201).json({ created: created.length, skipped });
   } catch (err) {
     // ordered:false still writes the valid docs even when some fail — report the split

@@ -4,7 +4,7 @@ import cors from "cors";
 import helmet from "helmet";
 import adminRoutes from "./routes/admin.js";
 import businessRoutes from "./routes/business.js";
-import publicRoutes from "./routes/public.js";
+import feedbackRoutes from "./routes/feedback.js";
 import { connectDB } from "./db.js";
 
 if (!process.env.JWT_SECRET) {
@@ -32,7 +32,7 @@ app.use((req, res, next) => {
 
 app.use("/admin", adminRoutes);
 app.use("/business", businessRoutes);
-app.use("/", publicRoutes);
+app.use("/api/v1/feedback", feedbackRoutes);
 
 // Central error handler — every route is wrapped with ah() so thrown/rejected
 // errors land here instead of crashing the process via an unhandled rejection.

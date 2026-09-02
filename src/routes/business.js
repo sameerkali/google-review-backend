@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 import Business from "../models/Business.js";
 import Hardware from "../models/Hardware.js";
 import AnalyticsEvent from "../models/AnalyticsEvent.js";
-import ReviewSuggestion from "../models/ReviewSuggestion.js";
+import MenuItem from "../models/MenuItem.js";
 import { businessAuth, signBusiness } from "../middleware/auth.js";
 import { verifyPassword } from "../utils/password.js";
 import { ah } from "../utils/asyncHandler.js";
@@ -36,19 +36,20 @@ r.get("/me/qr", ah(async (req, res) => {
   res.json(hardware.map((h) => ({ serial: h.serial, type: h.type })));
 }));
 
-r.get("/me/reviews", ah(async (req, res) => {
-  res.json(await ReviewSuggestion.find({ businessId: req.businessId }).sort({ createdAt: -1 }).lean());
+r.get("/me/menu-items", ah(async (req, res) => {
+  res.json(await MenuItem.find({ businessId: req.businessId }).sort({ sortOrder: 1, name: 1 }).lean());
 }));
 
-r.post("/me/reviews", ah(async (req, res) => {
-  const reviewText = String(req.body.reviewText || "").trim();
-  if (!reviewText) return res.status(400).json({ error: "reviewText is required" });
-  const s = await ReviewSuggestion.create({ businessId: req.businessId, reviewText });
-  res.status(201).json(s);
+r.post("/me/menu-items", ah(async (req, res) => {
+  const name = String(req.body.name || "").trim();
+  if (!name) return res.status(400).json({ error: "name is required" });
+  const price = req.body.price !== undefined && req.body.price !== null && !isNaN(Number(req.body.price)) ? Number(req.body.price) : undefined;
+  const m = await MenuItem.create({ businessId: req.businessId, name, category: req.body.category || undefined, price });
+  res.status(201).json(m);
 }));
 
-r.delete("/me/reviews/:id", ah(async (req, res) => {
-  const deleted = await ReviewSuggestion.findOneAndDelete({ _id: req.params.id, businessId: req.businessId }).lean();
+r.delete("/me/menu-items/:id", ah(async (req, res) => {
+  const deleted = await MenuItem.findOneAndDelete({ _id: req.params.id, businessId: req.businessId }).lean();
   return deleted ? res.json({ ok: true }) : res.status(404).json({ error: "not found" });
 }));
 
@@ -99,9 +100,9 @@ r.get("/me/suggestions", ah(async (req, res) => {
 
   const q = { businessId: new mongoose.Types.ObjectId(req.businessId) };
   // Single grouped aggregation for the two AnalyticsEvent counts instead of 2 round trips.
-  const [eventCounts, reviewCount, hardwareCount] = await Promise.all([
+  const [eventCounts, menuItemCount, hardwareCount] = await Promise.all([
     AnalyticsEvent.aggregate([{ $match: q }, { $group: { _id: "$eventType", count: { $sum: 1 } } }]),
-    ReviewSuggestion.countDocuments({ businessId: req.businessId }),
+    MenuItem.countDocuments({ businessId: req.businessId, active: true }),
     Hardware.countDocuments({ assignedBusinessId: req.businessId }),
   ]);
   const byType = { scan: 0, google_click: 0 };
@@ -113,8 +114,8 @@ r.get("/me/suggestions", ah(async (req, res) => {
   // thresholds on data we already have, gated behind the Pro-only feature flag.
   const tips = [];
   if (scans === 0) tips.push("No scans yet — make sure your QR code or table tent is visible and well-lit near checkout.");
-  if (scans > 0 && clicks / scans < 0.5) tips.push(`Only ${Math.round((clicks / scans) * 100)}% of scans lead to a Google review — try shorter, more specific review suggestions.`);
-  if (reviewCount < 3) tips.push(`You have ${reviewCount} review suggestion${reviewCount === 1 ? "" : "s"} — adding a few more gives customers more natural variety.`);
+  if (scans > 0 && clicks / scans < 0.5) tips.push(`Only ${Math.round((clicks / scans) * 100)}% of scans lead to a Google review — try shortening the flow or moving the code somewhere more visible.`);
+  if (menuItemCount < 5) tips.push(`You have ${menuItemCount} menu item${menuItemCount === 1 ? "" : "s"} listed — adding more gives customers a better chance of finding what they ordered.`);
   if (hardwareCount < 2) tips.push("You only have one QR/NFC code active — a second one (e.g. at the table and at checkout) catches more customers.");
   if (!tips.length) tips.push("You're doing well across the board — keep an eye on your conversion rate as scan volume grows.");
 
