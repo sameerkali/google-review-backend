@@ -7,6 +7,7 @@
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "seed": "node src/seed.js",
+    "seed:growth-demo": "node src/seedGrowthDemo.js",
     "backfill-daily-stats": "node src/jobs/backfillDailyStats.js"
   },
   "dependencies": {
