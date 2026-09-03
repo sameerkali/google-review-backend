@@ -175,8 +175,26 @@ r.delete("/plans/:id", ah(async (req, res) => {
 }));
 
 r.post("/menu-items", ah(async (req, res) => {
-  const m = await MenuItem.create(req.body);
+  // Default new items to the end of the list instead of tying at the
+  // schema default of 0 and colliding with whatever's already there.
+  const last = await MenuItem.findOne({ businessId: req.body.businessId }).sort({ sortOrder: -1 }).select("sortOrder").lean();
+  const sortOrder = req.body.sortOrder ?? (last?.sortOrder ?? -1) + 1;
+  const m = await MenuItem.create({ ...req.body, sortOrder });
   res.status(201).json(m);
+}));
+
+r.patch("/menu-items/reorder", ah(async (req, res) => {
+  const { businessId, orderedIds } = req.body;
+  if (!businessId || !Array.isArray(orderedIds) || !orderedIds.length) {
+    return res.status(400).json({ error: "businessId and a non-empty orderedIds array are required" });
+  }
+  // Scoping each updateOne's filter by businessId naturally ignores any id
+  // that doesn't belong to this business — it just matches nothing.
+  const ops = orderedIds.map((id, index) => ({
+    updateOne: { filter: { _id: id, businessId }, update: { $set: { sortOrder: index } } },
+  }));
+  await MenuItem.bulkWrite(ops);
+  res.json({ ok: true });
 }));
 
 r.put("/menu-items/:id", ah(async (req, res) => {
@@ -232,6 +250,20 @@ r.post("/menu-items/bulk", ah(async (req, res) => {
   const skipped = items.length - docs.length;
   if (!docs.length) {
     return res.status(400).json({ error: "No valid items — each entry needs a businessId and name" });
+  }
+
+  // Assign sortOrder by position in the incoming array, appended after
+  // whatever's already there for that business (usually one businessId,
+  // but a batch could mix several) — one max query per unique businessId.
+  const businessIds = [...new Set(docs.map((d) => String(d.businessId)))];
+  const maxes = await Promise.all(
+    businessIds.map((id) => MenuItem.findOne({ businessId: id }).sort({ sortOrder: -1 }).select("sortOrder").lean())
+  );
+  const nextSortOrder = new Map(businessIds.map((id, i) => [id, (maxes[i]?.sortOrder ?? -1) + 1]));
+  for (const d of docs) {
+    const key = String(d.businessId);
+    d.sortOrder = nextSortOrder.get(key);
+    nextSortOrder.set(key, d.sortOrder + 1);
   }
 
   try {

@@ -42,8 +42,35 @@ r.post("/me/menu-items", ah(async (req, res) => {
   const name = String(req.body.name || "").trim();
   if (!name) return res.status(400).json({ error: "name is required" });
   const price = req.body.price !== undefined && req.body.price !== null && !isNaN(Number(req.body.price)) ? Number(req.body.price) : undefined;
-  const m = await MenuItem.create({ businessId: req.businessId, name, category: req.body.category || undefined, price });
+  // Default new items to the end of the list instead of tying at the
+  // schema default of 0 and colliding with whatever's already there.
+  const last = await MenuItem.findOne({ businessId: req.businessId }).sort({ sortOrder: -1 }).select("sortOrder").lean();
+  const sortOrder = (last?.sortOrder ?? -1) + 1;
+  const m = await MenuItem.create({ businessId: req.businessId, name, category: req.body.category || undefined, price, sortOrder });
   res.status(201).json(m);
+}));
+
+r.patch("/me/menu-items/reorder", ah(async (req, res) => {
+  const { orderedIds } = req.body;
+  if (!Array.isArray(orderedIds) || !orderedIds.length) {
+    return res.status(400).json({ error: "orderedIds is required and must be a non-empty array" });
+  }
+  // Scoping each updateOne's filter by businessId naturally ignores any id
+  // that doesn't belong to this business — it just matches nothing.
+  const ops = orderedIds.map((id, index) => ({
+    updateOne: { filter: { _id: id, businessId: req.businessId }, update: { $set: { sortOrder: index } } },
+  }));
+  await MenuItem.bulkWrite(ops);
+  res.json({ ok: true });
+}));
+
+r.patch("/me/menu-items/:id", ah(async (req, res) => {
+  const m = await MenuItem.findOneAndUpdate(
+    { _id: req.params.id, businessId: req.businessId },
+    req.body,
+    { new: true, runValidators: true }
+  );
+  return m ? res.json(m) : res.status(404).json({ error: "not found" });
 }));
 
 r.delete("/me/menu-items/:id", ah(async (req, res) => {
