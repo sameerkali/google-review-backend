@@ -9,5 +9,11 @@ export function uaInfo(req) {
   const browser = /edg/.test(ua) ? "edge" : /chrome/.test(ua) ? "chrome" : /firefox/.test(ua) ? "firefox" : /safari/.test(ua) ? "safari" : "other";
   const os = /windows/.test(ua) ? "windows" : /android/.test(ua) ? "android" : /iphone|ipad/.test(ua) ? "ios" : /mac/.test(ua) ? "macos" : /linux/.test(ua) ? "linux" : "other";
   const ip = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket.remoteAddress || "";
-  return { device, browser, os, ipHash: crypto.createHash("sha256").update(ip).digest("hex") };
+  // Keyed HMAC, not a bare hash — the IPv4 space is only ~4.3 billion
+  // addresses, so an unsalted SHA-256(ip) is a rainbow-table-in-minutes
+  // problem and isn't real anonymization. Reusing JWT_SECRET as the HMAC key
+  // avoids introducing a second secret to provision (server.js already
+  // requires it to be set).
+  const ipHash = crypto.createHmac("sha256", process.env.JWT_SECRET).update(ip).digest("hex");
+  return { device, browser, os, ipHash };
 }

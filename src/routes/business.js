@@ -5,12 +5,16 @@ import MenuItem from "../models/MenuItem.js";
 import { businessAuth, signBusiness } from "../middleware/auth.js";
 import { verifyPassword } from "../utils/password.js";
 import { ah } from "../utils/asyncHandler.js";
-import { authLimiter } from "../middleware/rateLimit.js";
+import { businessAuthLimiter } from "../middleware/rateLimit.js";
 
 const r = Router();
 
-r.post("/login", authLimiter, ah(async (req, res) => {
-  const { email, password } = req.body;
+r.post("/login", businessAuthLimiter, ah(async (req, res) => {
+  // Coerced to String before hitting a Mongo filter — otherwise a body like
+  // { "email": { "$gt": "" } } would turn `email` into a query operator that
+  // matches an arbitrary business instead of a literal lookup.
+  const email = String(req.body.email ?? "");
+  const password = String(req.body.password ?? "");
   const business = await Business.findOne({ email }).select("+passwordHash").lean();
   if (!business || !verifyPassword(password, business.passwordHash)) {
     return res.status(401).json({ error: "Invalid email or password" });

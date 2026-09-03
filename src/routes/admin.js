@@ -8,17 +8,25 @@ import MenuItem from "../models/MenuItem.js";
 import { adminAuth, signAdmin } from "../middleware/auth.js";
 import { hashPassword, safeEqual } from "../utils/password.js";
 import { ah } from "../utils/asyncHandler.js";
-import { authLimiter } from "../middleware/rateLimit.js";
+import { adminAuthLimiter } from "../middleware/rateLimit.js";
+
+// No "admin"/"admin" fallback — an unset env var must fail loudly at boot,
+// not silently open the admin panel with a default credential.
+if (!process.env.ADMIN_USERNAME || !process.env.ADMIN_PASSWORD) {
+  throw new Error("ADMIN_USERNAME and ADMIN_PASSWORD environment variables are required");
+}
 
 const r = Router();
 
 // Escapes regex metacharacters so a search string is matched literally.
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-r.post("/login", authLimiter, (req, res) => {
-  const adminUser = process.env.ADMIN_USERNAME || "admin";
-  const adminPass = process.env.ADMIN_PASSWORD || "admin";
-  const ok = safeEqual(req.body.username, adminUser) && safeEqual(req.body.password, adminPass);
+// Max rows returned by the unpaginated "full list" branches below — a safety
+// net for GET /business and GET /hardware, not a real pagination substitute.
+const UNPAGINATED_CAP = 2000;
+
+r.post("/login", adminAuthLimiter, (req, res) => {
+  const ok = safeEqual(req.body.username, process.env.ADMIN_USERNAME) && safeEqual(req.body.password, process.env.ADMIN_PASSWORD);
   return ok
     ? res.json({ token: signAdmin() })
     : res.status(401).json({ error: "invalid username or password" });
@@ -27,7 +35,10 @@ r.post("/login", authLimiter, (req, res) => {
 r.use(adminAuth);
 
 r.post("/business", ah(async (req, res) => {
-  const { serial, password, ...body } = req.body;
+  // passwordHash is a real schema field, not an arbitrary key — strip any
+  // client-supplied value so the only way to set it is through `password`
+  // below, hashed properly.
+  const { serial, password, passwordHash: _ignoredPasswordHash, ...body } = req.body;
   const serials = (Array.isArray(serial) ? serial : serial ? [serial] : [])
     .map((s) => String(s).trim())
     .filter(Boolean);
@@ -61,7 +72,7 @@ r.post("/business", ah(async (req, res) => {
 }));
 
 r.put("/business/:id", ah(async (req, res) => {
-  const { password, ...body } = req.body;
+  const { password, passwordHash: _ignoredPasswordHash, ...body } = req.body;
   if (password) body.passwordHash = hashPassword(password);
   const b = await Business.findByIdAndUpdate(req.params.id, body, { new: true, runValidators: true });
   if (!b) return res.status(404).json({ error: "not found" });
@@ -78,7 +89,7 @@ r.get("/business", ah(async (req, res) => {
 
   // No `page` → full list, unfiltered (used to bootstrap dropdowns elsewhere in the admin panel).
   if (!page) {
-    const list = await Business.find().populate("planId").sort({ createdAt: -1 }).lean();
+    const list = await Business.find().populate("planId").sort({ createdAt: -1 }).limit(UNPAGINATED_CAP).lean();
     return res.json(list);
   }
 
@@ -119,7 +130,7 @@ r.get("/hardware", ah(async (req, res) => {
 
   // No `page` → full list, unfiltered (used to bootstrap dropdowns elsewhere in the admin panel).
   if (!page) {
-    const list = await Hardware.find().populate("assignedBusinessId").sort({ createdAt: -1 }).lean();
+    const list = await Hardware.find().populate("assignedBusinessId").sort({ createdAt: -1 }).limit(UNPAGINATED_CAP).lean();
     return res.json(list);
   }
 
@@ -145,7 +156,11 @@ r.delete("/hardware/:id", ah(async (req, res) => {
 }));
 
 r.post("/assign", ah(async (req, res) => {
-  const { serial, businessId } = req.body;
+  // Coerced to String before hitting a Mongo filter — otherwise a body like
+  // { "serial": { "$ne": null } } would turn `serial` into a query operator
+  // instead of a literal value.
+  const serial = String(req.body.serial ?? "");
+  const businessId = String(req.body.businessId ?? "");
   const h = await Hardware.findOneAndUpdate(
     { serial },
     { assignedBusinessId: businessId, status: "assigned" },
@@ -184,10 +199,14 @@ r.post("/menu-items", ah(async (req, res) => {
 }));
 
 r.patch("/menu-items/reorder", ah(async (req, res) => {
-  const { businessId, orderedIds } = req.body;
-  if (!businessId || !Array.isArray(orderedIds) || !orderedIds.length) {
+  if (!req.body.businessId || !Array.isArray(req.body.orderedIds) || !req.body.orderedIds.length) {
     return res.status(400).json({ error: "businessId and a non-empty orderedIds array are required" });
   }
+  // Coerced to String — otherwise a businessId of e.g. { "$ne": null } would
+  // turn the safety scoping below into a query operator instead of a literal
+  // match, defeating the "ignore ids from another business" guarantee.
+  const businessId = String(req.body.businessId);
+  const orderedIds = req.body.orderedIds;
   // Scoping each updateOne's filter by businessId naturally ignores any id
   // that doesn't belong to this business — it just matches nothing.
   const ops = orderedIds.map((id, index) => ({
@@ -247,27 +266,40 @@ r.post("/menu-items/bulk", ah(async (req, res) => {
       category: it.category || undefined,
       price: it.price !== undefined && it.price !== null && !isNaN(Number(it.price)) ? Number(it.price) : undefined,
     }));
-  const skipped = items.length - docs.length;
+  let skipped = items.length - docs.length;
   if (!docs.length) {
     return res.status(400).json({ error: "No valid items — each entry needs a businessId and name" });
+  }
+
+  // `ref: "Business"` on the schema isn't a foreign-key constraint — Mongo
+  // will happily insert a menu item against a businessId that doesn't exist.
+  // Check existence per unique businessId up front and drop items for any
+  // that don't resolve, instead of leaving orphaned menu items behind.
+  const uniqueBusinessIds = [...new Set(docs.map((d) => String(d.businessId)))];
+  const existingBusinesses = await Business.find({ _id: { $in: uniqueBusinessIds } }).select("_id").lean();
+  const validBusinessIds = new Set(existingBusinesses.map((b) => String(b._id)));
+  const validDocs = docs.filter((d) => validBusinessIds.has(String(d.businessId)));
+  skipped += docs.length - validDocs.length;
+  if (!validDocs.length) {
+    return res.status(400).json({ error: "No valid items — check businessId is a valid, existing business id" });
   }
 
   // Assign sortOrder by position in the incoming array, appended after
   // whatever's already there for that business (usually one businessId,
   // but a batch could mix several) — one max query per unique businessId.
-  const businessIds = [...new Set(docs.map((d) => String(d.businessId)))];
+  const businessIds = [...new Set(validDocs.map((d) => String(d.businessId)))];
   const maxes = await Promise.all(
     businessIds.map((id) => MenuItem.findOne({ businessId: id }).sort({ sortOrder: -1 }).select("sortOrder").lean())
   );
   const nextSortOrder = new Map(businessIds.map((id, i) => [id, (maxes[i]?.sortOrder ?? -1) + 1]));
-  for (const d of docs) {
+  for (const d of validDocs) {
     const key = String(d.businessId);
     d.sortOrder = nextSortOrder.get(key);
     nextSortOrder.set(key, d.sortOrder + 1);
   }
 
   try {
-    const created = await MenuItem.insertMany(docs, { ordered: false });
+    const created = await MenuItem.insertMany(validDocs, { ordered: false });
     res.status(201).json({ created: created.length, skipped });
   } catch (err) {
     // ordered:false still writes the valid docs even when some fail — report the split
@@ -275,7 +307,7 @@ r.post("/menu-items/bulk", ah(async (req, res) => {
     const created = err.insertedDocs?.length ?? err.result?.result?.nInserted ?? 0;
     res.status(created ? 207 : 400).json({
       created,
-      skipped: skipped + (docs.length - created),
+      skipped: skipped + (validDocs.length - created),
       error: "Some rows failed — check businessId is a valid, existing business id",
     });
   }

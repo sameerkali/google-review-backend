@@ -18,11 +18,19 @@ app.set("trust proxy", 1);
 app.use(helmet());
 
 // CORS_ORIGIN is optional (comma-separated) — unset keeps the original
-// allow-all behavior so nothing breaks without extra config.
+// allow-all behavior so nothing breaks without extra config. That's fine for
+// local dev, but a deployed API serving bearer-token-authenticated requests
+// should have an explicit allowlist — warn loudly (not a hard failure, since
+// an API that refuses to boot is worse than one that's temporarily too open).
 const corsOrigins = process.env.CORS_ORIGIN?.split(",").map((o) => o.trim()).filter(Boolean);
+if (!corsOrigins?.length && (process.env.VERCEL || process.env.NODE_ENV === "production")) {
+  console.error("WARNING: CORS_ORIGIN is not set in a production deployment — allowing all origins. Set CORS_ORIGIN to your frontend's URL(s).");
+}
 app.use(cors(corsOrigins?.length ? { origin: corsOrigins } : undefined));
 
-app.use(express.json());
+// Bumped from the 100kb default — the admin JSON bulk-menu-upload endpoint
+// (POST /admin/menu-items/bulk) needs headroom for a full exported menu file.
+app.use(express.json({ limit: "1mb" }));
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 

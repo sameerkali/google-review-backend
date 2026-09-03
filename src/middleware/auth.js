@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import Business from "../models/Business.js";
 
 export const adminAuth = (req, res, next) => {
   const token = (req.headers.authorization || "").replace("Bearer ", "");
@@ -13,11 +14,20 @@ export const adminAuth = (req, res, next) => {
 export const signAdmin = () =>
   jwt.sign({ role: "admin" }, process.env.JWT_SECRET, { expiresIn: "7d" });
 
-export const businessAuth = (req, res, next) => {
+// Re-checks the business's live status on every request rather than trusting
+// only the JWT signature — a token is valid for 30 days, so without this an
+// admin suspending or deleting a business wouldn't actually cut off access
+// until the token happened to expire.
+export const businessAuth = async (req, res, next) => {
   const token = (req.headers.authorization || "").replace("Bearer ", "");
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
     if (payload.role !== "business" || !payload.businessId) throw new Error("wrong role");
+    const business = await Business.findById(payload.businessId).select("status").lean();
+    if (!business) return res.status(401).json({ error: "unauthorized" });
+    if (business.status !== "active") {
+      return res.status(403).json({ error: `This account is ${business.status}. Contact your platform admin.` });
+    }
     req.businessId = payload.businessId;
     next();
   } catch {

@@ -17,7 +17,16 @@ const businessSchema = new mongoose.Schema(
         message: "website must start with http:// or https://",
       },
     },
-    googleReviewUrl: String,
+    // Handed back to end-user clients verbatim (feedback.js's /clicked route)
+    // for the browser to navigate to — validated the same way `website` is
+    // so a non-http(s) scheme (e.g. javascript:) can't end up there.
+    googleReviewUrl: {
+      type: String,
+      validate: {
+        validator: (v) => !v || /^https?:\/\//i.test(v),
+        message: "googleReviewUrl must start with http:// or https://",
+      },
+    },
     logoUrl: String,
     planId: { type: mongoose.Schema.Types.ObjectId, ref: "Plan" },
     status: { type: String, enum: ["active", "suspended", "expired"], default: "active" },

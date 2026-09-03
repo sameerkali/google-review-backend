@@ -111,12 +111,27 @@ r.patch("/:token", ah(async (req, res) => {
 
   const { rating, menuItemIds, freeTextItem, aspects } = req.body;
   const set = {};
-  if (rating !== undefined) set.rating = rating;
-  if (menuItemIds !== undefined) set.menuItemIds = menuItemIds;
+  // updateOne() doesn't run schema validators (min/max) unless told to —
+  // the schema's rating: {min:1, max:5} would otherwise be silently skipped
+  // and let a bad value (999, a string, etc) land straight in the document.
+  if (rating !== undefined) {
+    const r = Number(rating);
+    if (!Number.isInteger(r) || r < 1 || r > 5) {
+      return res.status(400).json({ error: "rating must be an integer from 1 to 5" });
+    }
+    set.rating = r;
+  }
+  if (menuItemIds !== undefined) {
+    if (!Array.isArray(menuItemIds)) return res.status(400).json({ error: "menuItemIds must be an array" });
+    set.menuItemIds = menuItemIds;
+  }
   if (freeTextItem !== undefined) set.freeTextItem = String(freeTextItem).slice(0, 120);
-  if (aspects !== undefined) set.aspects = aspects;
+  if (aspects !== undefined) {
+    if (!Array.isArray(aspects)) return res.status(400).json({ error: "aspects must be an array" });
+    set.aspects = aspects;
+  }
 
-  await FeedbackSession.updateOne({ _id: session._id }, { $set: set });
+  await FeedbackSession.updateOne({ _id: session._id }, { $set: set }, { runValidators: true });
   res.json({ ok: true });
 }));
 

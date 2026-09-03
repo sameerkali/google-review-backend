@@ -115,19 +115,26 @@ export async function aggregateDailyStatsForBusiness(businessId, date) {
   return doc;
 }
 
-/** Runs the aggregation above for every business, for one UTC day. Used by
-    both the nightly cron endpoint and the backfill script. */
+// How many businesses to aggregate concurrently — fully sequential becomes
+// the long pole in the nightly job as the business count grows; fully
+// parallel risks overwhelming the (deliberately small, see db.js) connection
+// pool. A small fixed batch size is a safe middle ground.
+const AGGREGATION_CONCURRENCY = 5;
+
+/** Runs the aggregation above for every business, for one UTC day, in
+    batches rather than one at a time. Used by both the nightly cron endpoint
+    and the backfill script. One business failing doesn't stop the rest. */
 export async function aggregateDailyStatsForAllBusinesses(date) {
   const businesses = await Business.find().select("_id").lean();
   let ok = 0;
   const failed = [];
-  for (const b of businesses) {
-    try {
-      await aggregateDailyStatsForBusiness(b._id, date);
-      ok++;
-    } catch (err) {
-      failed.push({ businessId: String(b._id), error: err.message });
-    }
+  for (let i = 0; i < businesses.length; i += AGGREGATION_CONCURRENCY) {
+    const batch = businesses.slice(i, i + AGGREGATION_CONCURRENCY);
+    const results = await Promise.allSettled(batch.map((b) => aggregateDailyStatsForBusiness(b._id, date)));
+    results.forEach((result, idx) => {
+      if (result.status === "fulfilled") ok++;
+      else failed.push({ businessId: String(batch[idx]._id), error: result.reason?.message });
+    });
   }
   return { total: businesses.length, ok, failed };
 }
