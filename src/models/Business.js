@@ -30,7 +30,14 @@ const businessSchema = new mongoose.Schema(
     logoUrl: String,
     planId: { type: mongoose.Schema.Types.ObjectId, ref: "Plan" },
     status: { type: String, enum: ["active", "suspended", "expired"], default: "active" },
+    // Repurposed as the price-lock expiry for the current plan pricing tiers
+    // (set to +12 months on onboarding, see admin.js's POST /business) —
+    // was unused by any other code path before this.
     renewalDate: Date,
+    // Queryable/reportable flag for the Founding Partner pricing tier,
+    // instead of that status being inferable only from which Plan doc a
+    // business happens to reference.
+    foundingPartner: { type: Boolean, default: false },
     // Lets the business owner log into their own portal. Optional — set by an
     // admin (onboarding wizard or Edit Business), never self-registered.
     passwordHash: { type: String, select: false },

@@ -45,6 +45,11 @@ r.post("/business", ah(async (req, res) => {
     .map((s) => String(s).trim())
     .filter(Boolean);
   if (password) body.passwordHash = hashPassword(password);
+  // renewalDate doubles as the price-lock expiry for the plan a business
+  // onboards on — defaults to +12 months unless the caller sets it explicitly.
+  if (body.renewalDate === undefined) {
+    body.renewalDate = new Date(new Date().setFullYear(new Date().getFullYear() + 1));
+  }
 
   const b = await Business.create(body);
 
@@ -362,13 +367,16 @@ r.get("/analytics", ah(async (req, res) => {
 }));
 
 r.get("/overview", ah(async (_req, res) => {
-  const [businesses, activeBusinesses, hardware, events] = await Promise.all([
+  const [businesses, activeBusinesses, hardware, events, foundingPartners] = await Promise.all([
     Business.countDocuments(),
     Business.countDocuments({ status: "active" }),
     Hardware.countDocuments(),
     AnalyticsEvent.countDocuments(),
+    // No hard cap enforced anywhere — the "20" is a manually-tracked ceiling,
+    // this just gives a live "14/20 used" count without opening the DB.
+    Business.countDocuments({ foundingPartner: true }),
   ]);
-  res.json({ businesses, activeBusinesses, hardware, events });
+  res.json({ businesses, activeBusinesses, hardware, events, foundingPartners });
 }));
 
 export default r;
