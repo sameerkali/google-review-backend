@@ -98,9 +98,9 @@ r.get("/:token/menu", ah(async (req, res) => {
 
   const items = await MenuItem.find({ businessId: session.businessId, active: true })
     .sort({ sortOrder: 1, name: 1 })
-    .select("name category price")
+    .select("name category price featured")
     .lean();
-  res.json(items.map((i) => ({ id: i._id, name: i.name, category: i.category || null, price: i.price ?? null })));
+  res.json(items.map((i) => ({ id: i._id, name: i.name, category: i.category || null, price: i.price ?? null, featured: i.featured })));
 }));
 
 // PATCH /api/v1/feedback/:token — save answers, idempotent per screen. Every
