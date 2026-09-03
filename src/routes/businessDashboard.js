@@ -27,6 +27,10 @@ async function requireTier(req, res, minTier) {
   if (TIER_ORDER[level] < TIER_ORDER[minTier]) {
     const totalScans = await FeedbackSession.countDocuments({ businessId: req.businessId });
     res.status(403).json({
+      // `reason: "tier"` distinguishes this from businessAuth's suspension
+      // 403 (reason: "suspended") — see middleware/auth.js for why that
+      // matters to a caller that gets a 403 on any business-scoped route.
+      reason: "tier",
       error: level === "none" ? "Reports are paused on your current plan." : "This is a Full-plan feature.",
       tier: level,
       totalScans,

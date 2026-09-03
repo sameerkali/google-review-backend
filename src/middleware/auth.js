@@ -26,7 +26,12 @@ export const businessAuth = async (req, res, next) => {
     const business = await Business.findById(payload.businessId).select("status").lean();
     if (!business) return res.status(401).json({ error: "unauthorized" });
     if (business.status !== "active") {
-      return res.status(403).json({ error: `This account is ${business.status}. Contact your platform admin.` });
+      // `reason: "suspended"` distinguishes this from businessDashboard.js's
+      // requireTier() 403 (reason: "tier") — both are a plain 403 on a
+      // business-scoped route, and a frontend has no other reliable way to
+      // tell "your account is suspended, log out" from "your plan doesn't
+      // include this report" without it.
+      return res.status(403).json({ reason: "suspended", status: business.status, error: `This account is ${business.status}. Contact your platform admin.` });
     }
     req.businessId = payload.businessId;
     next();
