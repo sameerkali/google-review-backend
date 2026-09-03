@@ -10,22 +10,26 @@ import { cronLimiter } from "../middleware/rateLimit.js";
    is safe (aggregateDailyStatsForBusiness upserts), so a retry never
    double-counts. */
 
-// In a deployed environment this endpoint MUST be behind a secret — without
-// one it's a public "recompute analytics for every business" trigger with no
-// rate limit of its own, i.e. a free DoS/cost-amplification lever. Only local
-// dev (no VERCEL, no NODE_ENV=production) is allowed to run without it.
-if ((process.env.VERCEL || process.env.NODE_ENV === "production") && !process.env.CRON_SECRET) {
-  throw new Error("CRON_SECRET environment variable is required in production/Vercel deployments");
-}
-
 const r = Router();
 r.use(cronLimiter);
 
 // Vercel Cron sends a GET request to trigger the job.
 r.get("/daily-stats", ah(async (req, res) => {
+  // Checked per-request, not at module load — a missing env var must only
+  // break this one route, not crash the whole serverless function (every
+  // other route ships in the same bundle and would go down with it).
+  // In a deployed environment this endpoint MUST be behind a secret — without
+  // one it's a public "recompute analytics for every business" trigger, i.e.
+  // a free DoS/cost-amplification lever. Only local dev (no VERCEL, no
+  // NODE_ENV=production) is allowed to run without one configured.
+  const secret = process.env.CRON_SECRET;
+  const secretRequired = process.env.VERCEL || process.env.NODE_ENV === "production";
+  if (secretRequired && !secret) {
+    console.error("CRON_SECRET is not configured in a production/Vercel deployment");
+    return res.status(500).json({ error: "This endpoint is not configured on this server" });
+  }
   // Vercel signs cron requests with this header when CRON_SECRET is set —
   // reject anything else so this isn't a public "recompute everything" endpoint.
-  const secret = process.env.CRON_SECRET;
   if (secret && req.headers.authorization !== `Bearer ${secret}`) {
     return res.status(401).json({ error: "unauthorized" });
   }

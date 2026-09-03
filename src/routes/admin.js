@@ -10,12 +10,6 @@ import { hashPassword, safeEqual } from "../utils/password.js";
 import { ah } from "../utils/asyncHandler.js";
 import { adminAuthLimiter } from "../middleware/rateLimit.js";
 
-// No "admin"/"admin" fallback — an unset env var must fail loudly at boot,
-// not silently open the admin panel with a default credential.
-if (!process.env.ADMIN_USERNAME || !process.env.ADMIN_PASSWORD) {
-  throw new Error("ADMIN_USERNAME and ADMIN_PASSWORD environment variables are required");
-}
-
 const r = Router();
 
 // Escapes regex metacharacters so a search string is matched literally.
@@ -26,6 +20,14 @@ const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const UNPAGINATED_CAP = 2000;
 
 r.post("/login", adminAuthLimiter, (req, res) => {
+  // Checked per-request, not at module load — a missing env var must only
+  // break this route, not crash the whole serverless function (every other
+  // route lives in the same bundle and would go down with it). Still no
+  // "admin"/"admin" fallback: if these aren't configured, login fails closed.
+  if (!process.env.ADMIN_USERNAME || !process.env.ADMIN_PASSWORD) {
+    console.error("ADMIN_USERNAME/ADMIN_PASSWORD are not configured");
+    return res.status(500).json({ error: "Admin login is not configured on this server" });
+  }
   const ok = safeEqual(req.body.username, process.env.ADMIN_USERNAME) && safeEqual(req.body.password, process.env.ADMIN_PASSWORD);
   return ok
     ? res.json({ token: signAdmin() })
